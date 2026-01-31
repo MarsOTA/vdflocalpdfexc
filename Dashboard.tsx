@@ -692,6 +692,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
             }
           }
         });
+      }
+
 
       const buf = await wb.xlsx.writeBuffer();
       const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
