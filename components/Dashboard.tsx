@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { MOCK_OPERATORS, ALL_SPECIALIZATIONS, ALL_SEDI, ALL_PATENTI } from '../constants';
 import { OperationalEvent, EventStatus, UserRole, Operator, PersonnelRequirement } from '../types';
 import { getMainDayCode, getPriorityChain, selectableForVigilanza } from '../utils/turnarioLogic';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs/dist/exceljs.min.js';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 
@@ -359,6 +359,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
           // Badge/percentuale un filo più grandi (se marcati)
           clonedDoc.querySelectorAll('[data-pdf-badge="true"]').forEach((el: any) => {
             el.style.fontSize = '10px';
+            // Evita tagli delle qualifiche nel PDF (es. "VIGILE E COORD")
+            el.style.whiteSpace = 'normal';
+            el.style.overflow = 'visible';
+            el.style.textOverflow = 'clip';
+            el.style.wordBreak = 'break-word';
+            el.style.lineHeight = '1.05';
+
+            // Allarga leggermente la colonna qualifica (sovrascrive w-24)
+            const parent = el.parentElement as HTMLElement | null;
+            if (parent) {
+              parent.style.overflow = 'visible';
+              parent.style.width = '120px';
+              parent.style.flex = '0 0 120px';
+            }
           });
           clonedDoc.querySelectorAll('[data-pdf-percent="true"]').forEach((el: any) => {
             el.style.fontSize = '12px';
@@ -408,175 +422,309 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
   };
 
   /**
-   * Excel export pensato per stampa su A3 in formato "card" 3x3.
-   * Nota: con SheetJS community non possiamo applicare bordi/stili avanzati come nel vostro template,
-   * ma possiamo riprodurre layout (celle, merge, dimensioni, print area) in modo coerente.
+   * Excel export A3 LANDSCAPE con layout "a card" come la reference fornita:
+   * - 3 colonne
+   * - fino a 3 righe per pagina (9 card)
+   * - bordi marcati (medium) per delimitare ogni servizio
+   * - focus su TITOLO / ORARI / NOMINATIVI (nessuna % completamento)
    */
-  const handleDownloadExcel = () => {
-    const wb = XLSX.utils.book_new();
+  
+  const handleDownloadExcel = async () => {
+    try {
+      const wb = new (ExcelJS as any).Workbook();
 
-    const COLS_PER_BLOCK = 14;
-    const COL_GAP = 1;
-    const ROWS_PER_BLOCK = 18;
-    const ROW_GAP = 1;
-    const GRID_COLS = 3;
-    const GRID_ROWS = 3;
-    const EVENTS_PER_PAGE = GRID_COLS * GRID_ROWS; // 9
+      const EVENTS_PER_PAGE = 9; // 3x3
+      const totalPages = Math.max(1, Math.ceil(displayEvents.length / EVENTS_PER_PAGE));
 
-    const totalPages = Math.max(1, Math.ceil(displayEvents.length / EVENTS_PER_PAGE));
+      // Layout richiesto:
+      // - A3 landscape
+      // - 3 colonne di card
+      // - ogni card = 6 colonne (1 qualifica + 5 nominativo)
+      // - 2 colonne vuote tra una card e l'altra
+      const CARD_COLS = 6;
+      const GAP_COLS = 2;
+      const CARDS_PER_ROW = 3;
+      const CARD_ROWS = 11; // titolo, orario, 6 righe nominativi, APS, 2 righe area %, box % in basso a dx
+      const GAP_ROWS = 1;
+      const CARDS_PER_COL = 3;
 
-    // Helper: convert 0-based col index to Excel column letters
-    const colToA1 = (col: number) => {
-      let n = col + 1;
-      let s = '';
-      while (n > 0) {
-        const r = (n - 1) % 26;
-        s = String.fromCharCode(65 + r) + s;
-        n = Math.floor((n - 1) / 26);
-      }
-      return s;
-    };
+      const colStarts = [1, 1 + CARD_COLS + GAP_COLS, 1 + (CARD_COLS + GAP_COLS) * 2]; // A, I, Q
+      const rowStarts = [2, 2 + CARD_ROWS + GAP_ROWS, 2 + (CARD_ROWS + GAP_ROWS) * 2];
 
-    const setCell = (ws: XLSX.WorkSheet, r: number, c: number, v: any) => {
-      const addr = `${colToA1(c)}${r + 1}`;
-      ws[addr] = { t: typeof v === 'number' ? 'n' : 's', v } as any;
-    };
+      const formatDateHeader = (iso: string) => {
+        const [y, m, d] = iso.split('-');
+        return `${d}-${m}-${y}`;
+      };
 
-    const addMerge = (merges: XLSX.Range[], r0: number, c0: number, r1: number, c1: number) => {
-      merges.push({ s: { r: r0, c: c0 }, e: { r: r1, c: c1 } });
-    };
+      const calcDurationHours = (timeWindow: string) => {
+        const [a, b] = timeWindow.split(' - ').map(s => s.trim());
+        if (!a || !b) return '';
+        const [ah, am] = a.split(':').map(Number);
+        const [bh, bm] = b.split(':').map(Number);
+        if ([ah, am, bh, bm].some(n => Number.isNaN(n))) return '';
+        let start = ah * 60 + am;
+        let end = bh * 60 + bm;
+        if (end < start) end += 24 * 60;
+        const mins = end - start;
+        const hrs = mins / 60;
+        return Math.abs(hrs - Math.round(hrs)) < 1e-6 ? `${Math.round(hrs)}h.` : `${hrs.toFixed(1)}h.`;
+      };
 
-    const computeCompletion = (ev: OperationalEvent) => {
-      const total = ev.requirements.reduce((sum, r) => sum + (r.qty || 0), 0);
-      const filled = ev.requirements.reduce((sum, r) => sum + (r.assignedIds?.filter(Boolean).length || 0), 0);
-      if (total <= 0) return 0;
-      return Math.round((filled / total) * 100);
-    };
+      const computeCompletionPercent = (ev: OperationalEvent) => {
+        const totalRequired = ev.requirements.reduce((acc, r) => acc + (r.qty || 0), 0);
+        const totalFilled = ev.requirements.reduce((acc, r) => acc + (r.assignedIds?.filter(Boolean).length || 0), 0);
+        return totalRequired > 0 ? Math.round((totalFilled / totalRequired) * 100) : 0;
+      };
 
-    const buildLines = (ev: OperationalEvent) => {
-      const lines: string[] = [];
-      const dayCode = getMainDayCode(new Date(ev.date + 'T00:00:00'));
-      const priorityChain = getPriorityChain(dayCode);
+      // Ritorna righe (qualifica, nominativo) con una riga per ogni slot richiesto.
+      // Regole:
+      // - Ogni nominativo su una riga (mai insieme)
+      // - Qualifica su colonna dedicata (non unita al nominativo)
+      // - ALT: solo qualifica "ALT" e nominativo, senza ripetere "(altro)" o altre etichette nel nominativo
+      const buildNameRows = (ev: OperationalEvent) => {
+        const rows: { q: string; n: string }[] = [];
 
-      ev.requirements.forEach(req => {
-        if (!req.qty || req.qty === 0) return;
-        const names: string[] = [];
-        for (let i = 0; i < req.qty; i++) {
-          const assignedId = req.assignedIds?.[i];
-          const operator = assignedId ? MOCK_OPERATORS.find(o => o.id === assignedId) : null;
-          const entrustedTo = req.entrustedGroups?.[i];
+        const pushRole = (role: string, label: string) => {
+          const req = ev.requirements.find(r => r.role === role);
+          if (!req || !req.qty) {
+            rows.push({ q: label, n: '' });
+            return;
+          }
+          for (let i = 0; i < req.qty; i++) {
+            const assignedId = req.assignedIds?.[i];
+            const operator = assignedId ? MOCK_OPERATORS.find(o => o.id === assignedId) : null;
+            const entrustedTo = req.entrustedGroups?.[i];
+            const name = operator ? operator.name : (entrustedTo ? `AFFIDATO ${entrustedTo}` : '');
+            rows.push({ q: label, n: name });
+          }
+        };
 
-          if (operator) {
-            names.push(operator.name);
-          } else if (entrustedTo) {
-            names.push(`AFFIDATO ${entrustedTo}`);
-          } else {
-            names.push(`VACANTE (${priorityChain[0]})`);
+        // Principali
+        pushRole('DIR', 'DIR');
+        pushRole('CP', 'CP');
+
+        // VIG: una riga per ogni slot
+        const vigReq = ev.requirements.find(r => r.role === 'VIG');
+        if (!vigReq || !vigReq.qty) {
+          rows.push({ q: 'VIG', n: '' });
+        } else {
+          for (let i = 0; i < vigReq.qty; i++) {
+            const assignedId = vigReq.assignedIds?.[i];
+            const operator = assignedId ? MOCK_OPERATORS.find(o => o.id === assignedId) : null;
+            const entrustedTo = vigReq.entrustedGroups?.[i];
+            const name = operator ? operator.name : (entrustedTo ? `AFFIDATO ${entrustedTo}` : '');
+            rows.push({ q: 'VIG', n: name });
           }
         }
-        const joined = names.join(', ');
-        lines.push(`${req.role} x${req.qty}: ${joined}`);
-      });
 
-      return lines;
-    };
+        // ALT: qualsiasi requisito diverso da DIR/CP/VIG
+        const main = new Set(['DIR', 'CP', 'VIG']);
+        ev.requirements.forEach(req => {
+          if (!req.qty || req.qty === 0) return;
+          if (main.has(req.role)) return;
 
-    for (let page = 0; page < totalPages; page++) {
-      const sheetName = totalPages === 1 ? 'A3' : `A3_${page + 1}`;
+          for (let i = 0; i < req.qty; i++) {
+            const assignedId = req.assignedIds?.[i];
+            const operator = assignedId ? MOCK_OPERATORS.find(o => o.id === assignedId) : null;
+            const entrustedTo = req.entrustedGroups?.[i];
+            const name = operator ? operator.name : (entrustedTo ? `AFFIDATO ${entrustedTo}` : '');
+            // Evita righe completamente vuote
+            if (name) rows.push({ q: 'ALT', n: name });
+          }
+        });
 
-      // Dimensioni foglio: 3 blocchi in orizzontale + gap
-      const totalCols = GRID_COLS * COLS_PER_BLOCK + (GRID_COLS - 1) * COL_GAP; // 44
-      const totalRows = GRID_ROWS * ROWS_PER_BLOCK + (GRID_ROWS - 1) * ROW_GAP; // 56
-
-      const aoa: (string | number | null)[][] = Array.from({ length: totalRows }, () => Array.from({ length: totalCols }, () => null));
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
-      const merges: XLSX.Range[] = [];
-
-      // colonne: width pensata per stampa (card leggibili)
-      ws['!cols'] = Array.from({ length: totalCols }, (_, idx) => {
-        // gap colonne più strette
-        const isGap = ((idx + 1) % (COLS_PER_BLOCK + COL_GAP) === 0) && idx !== totalCols - 1;
-        return { wch: isGap ? 2 : 4 };
-      });
-      // righe: un po' più alte per leggibilità
-      ws['!rows'] = Array.from({ length: totalRows }, (_, idx) => {
-        const isGap = ((idx + 1) % (ROWS_PER_BLOCK + ROW_GAP) === 0) && idx !== totalRows - 1;
-        return { hpt: isGap ? 6 : 12 };
-      });
-
-      const pageEvents = displayEvents.slice(page * EVENTS_PER_PAGE, (page + 1) * EVENTS_PER_PAGE);
-
-      pageEvents.forEach((ev, i) => {
-        const rBlock = Math.floor(i / GRID_COLS);
-        const cBlock = i % GRID_COLS;
-
-        const r0 = rBlock * (ROWS_PER_BLOCK + ROW_GAP);
-        const c0 = cBlock * (COLS_PER_BLOCK + COL_GAP);
-        const r1 = r0 + ROWS_PER_BLOCK - 1;
-        const c1 = c0 + COLS_PER_BLOCK - 1;
-
-        // Header
-        const completion = computeCompletion(ev);
-        const title = `${ev.code} — ${ev.location}`;
-        const time = `${ev.timeWindow}`;
-        const status = `${ev.status}`;
-
-        // Riga 1: titolo (merge) + percent
-        setCell(ws, r0, c0, title);
-        addMerge(merges, r0, c0, r0, c1 - 3);
-
-        setCell(ws, r0, c1 - 2, 'COMPL.');
-        addMerge(merges, r0, c1 - 2, r0, c1);
-
-        // Riga 2: orario (merge) + percent value
-        setCell(ws, r0 + 1, c0, `ORARIO: ${time}`);
-        addMerge(merges, r0 + 1, c0, r0 + 1, c1 - 3);
-
-        setCell(ws, r0 + 1, c1 - 2, `${completion}%`);
-        addMerge(merges, r0 + 1, c1 - 2, r0 + 2, c1);
-
-        // Riga 3: status (merge)
-        setCell(ws, r0 + 2, c0, `STATUS: ${status}`);
-        addMerge(merges, r0 + 2, c0, r0 + 2, c1 - 3);
-
-        // Corpo: righe requisiti (max 12)
-        const lines = buildLines(ev);
-        const maxLines = 12;
-        for (let k = 0; k < Math.min(lines.length, maxLines); k++) {
-          setCell(ws, r0 + 4 + k, c0, lines[k]);
-          addMerge(merges, r0 + 4 + k, c0, r0 + 4 + k, c1);
-        }
-
-        // Footer: data
-        setCell(ws, r1, c0, `DATA: ${ev.date}`);
-        addMerge(merges, r1, c0, r1, c1);
-      });
-
-      ws['!merges'] = merges;
-
-      // Page setup A3 landscape
-      (ws as any)['!pageSetup'] = {
-        paperSize: 8, // A3
-        orientation: 'landscape',
-        fitToWidth: 1,
-        fitToHeight: 1,
-        scale: 90,
+        return rows;
       };
-      (ws as any)['!margins'] = { left: 0.3, right: 0.3, top: 0.3, bottom: 0.3, header: 0.2, footer: 0.2 };
 
-      // print area
-      const lastCol = colToA1(totalCols - 1);
-      const lastRow = totalRows;
-      const ref = `${sheetName}!$A$1:$${lastCol}$${lastRow}`;
-      if (!wb.Workbook) wb.Workbook = {} as any;
-      if (!(wb.Workbook as any).Names) (wb.Workbook as any).Names = [];
-      (wb.Workbook as any).Names.push({ Name: '_xlnm.Print_Area', Ref: ref, Sheet: page });
+      const applyCellStyle = (cell: any, fontSize: number, bold: boolean, align: 'left' | 'center' = 'left') => {
+        cell.font = { name: 'Calibri', size: fontSize, bold };
+        cell.alignment = { vertical: 'middle', horizontal: align, wrapText: true };
+      };
 
-      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      const applyThinGrid = (ws: any, r0: number, c0: number, r1: number, c1: number) => {
+        for (let r = r0; r <= r1; r++) {
+          for (let c = c0; c <= c1; c++) {
+            ws.getCell(r, c).border = {
+              top: { style: 'thin' },
+              bottom: { style: 'thin' },
+              left: { style: 'thin' },
+              right: { style: 'thin' },
+            };
+          }
+        }
+      };
+
+      const applyOutlineMedium = (ws: any, r0: number, c0: number, r1: number, c1: number) => {
+        for (let r = r0; r <= r1; r++) {
+          for (let c = c0; c <= c1; c++) {
+            const cell = ws.getCell(r, c);
+            const b = cell.border || {};
+            cell.border = {
+              ...b,
+              top: r === r0 ? { style: 'medium' } : b.top,
+              bottom: r === r1 ? { style: 'medium' } : b.bottom,
+              left: c === c0 ? { style: 'medium' } : b.left,
+              right: c === c1 ? { style: 'medium' } : b.right,
+            };
+          }
+        }
+      };
+
+      // Colonne: card(6) + gap(2) + card(6) + gap(2) + card(6) = 22
+      const cardWidths = [4.8, 12, 12, 12, 12, 12]; // qualifica + 5 celle nominativo
+      const gapWidths = [2.5, 2.5];
+      const widths: number[] = [
+        ...cardWidths, ...gapWidths,
+        ...cardWidths, ...gapWidths,
+        ...cardWidths,
+      ];
+
+      for (let page = 0; page < totalPages; page++) {
+        const sheetName = totalPages === 1 ? 'A3' : `A3_${page + 1}`;
+        const ws = wb.addWorksheet(sheetName);
+
+        ws.pageSetup = {
+          paperSize: 8, // A3
+          orientation: 'landscape',
+          fitToPage: true,
+          fitToWidth: 1,
+          fitToHeight: 0,
+          horizontalCentered: false,
+          verticalCentered: false,
+          margins: { left: 0.3, right: 0.3, top: 0.3, bottom: 0.3, header: 0.2, footer: 0.2 },
+        };
+
+        ws.columns = widths.map((w: number, idx: number) => ({ key: `c${idx + 1}`, width: w }));
+
+        // Altezza righe (header + 3 blocchi)
+        for (let r = 1; r <= 39; r++) ws.getRow(r).height = 18;
+
+        ws.getRow(1).height = 32;
+
+        // Intestazione (come reference)
+        ws.mergeCells(1, 1, 1, 22); // A1:V1
+        const headerCell = ws.getCell(1, 1);
+        headerCell.value = {
+          richText: [
+            { text: 'DATA GIORNO  ', font: { name: 'Calibri', size: 24, bold: true } },
+            { text: `Data: ${formatDateHeader(selectedDate)}`, font: { name: 'Calibri', size: 20, bold: true } },
+          ],
+        };
+        headerCell.alignment = { vertical: 'middle', horizontal: 'left' };
+
+        // Footer
+        ws.mergeCells(39, 1, 39, 22);
+        const footerCell = ws.getCell(39, 1);
+        footerCell.value = `DATA: ${selectedDate}`;
+        footerCell.font = { name: 'Calibri', size: 12, bold: false };
+        footerCell.alignment = { vertical: 'middle', horizontal: 'left' };
+
+        // Eventi della pagina
+        const pageEvents = displayEvents.slice(page * EVENTS_PER_PAGE, (page + 1) * EVENTS_PER_PAGE);
+        pageEvents.forEach((ev, i) => {
+          const gridR = Math.floor(i / CARDS_PER_ROW);
+          const gridC = i % CARDS_PER_ROW;
+          const r0 = rowStarts[gridR];
+          const c0 = colStarts[gridC];
+          const r1 = r0 + CARD_ROWS - 1;
+          const c1 = c0 + CARD_COLS - 1;
+
+          // Card: griglia thin + contorno medium (contorno medio su tutta la card)
+          applyThinGrid(ws, r0, c0, r1, c1);
+          applyOutlineMedium(ws, r0, c0, r1, c1);
+
+          // Titolo (18pt bold)
+          ws.mergeCells(r0, c0, r0, c1);
+          const titleCell = ws.getCell(r0, c0);
+          titleCell.value = `${ev.location} — ${ev.code}`;
+          applyCellStyle(titleCell, 18, true, 'left');
+
+          // Orario + durata (18pt bold)
+          ws.mergeCells(r0 + 1, c0, r0 + 1, c1);
+          const dur = calcDurationHours(ev.timeWindow);
+          const orarioCell = ws.getCell(r0 + 1, c0);
+          orarioCell.value = `ORARIO: ${ev.timeWindow}${dur ? ` - DURATA: ${dur}` : ''}`;
+          applyCellStyle(orarioCell, 18, true, 'left');
+
+          // Righe nominativi
+          const rows = buildNameRows(ev);
+          const maxNameRows = 6;
+          for (let k = 0; k < maxNameRows; k++) {
+            const rr = r0 + 2 + k;
+            const qCell = ws.getCell(rr, c0);
+            const nStart = c0 + 1;
+            const nEnd = c1;
+
+            // Merge nominativo su 5 colonne
+            ws.mergeCells(rr, nStart, rr, nEnd);
+
+            const item = rows[k];
+            qCell.value = item ? item.q : '';
+            applyCellStyle(qCell, 16, true, 'left');
+
+            const nCell = ws.getCell(rr, nStart);
+            nCell.value = item ? item.n : '';
+            applyCellStyle(nCell, 16, false, 'left');
+
+            // Separatore verticale tra qualifica e nominativo (thin)
+            qCell.border = { ...(qCell.border || {}), right: { style: 'thin' } };
+            nCell.border = { ...(nCell.border || {}), left: { style: 'thin' } };
+          }
+
+          // APS code (13pt)
+          const dayCode = getMainDayCode(new Date(ev.date + 'T00:00:00'));
+          ws.mergeCells(r0 + 8, c0, r0 + 8, c1);
+          const apsCell = ws.getCell(r0 + 8, c0);
+          apsCell.value = `APS- ${dayCode}`;
+          apsCell.font = { name: 'Calibri', size: 13, bold: false };
+          apsCell.alignment = { vertical: 'middle', horizontal: 'left' };
+
+          // Box % completamento in basso a destra (come reference immagine)
+          const pct = computeCompletionPercent(ev);
+          const boxR0 = r0 + 9;
+          const boxR1 = r0 + 10;
+          const boxC0 = c0 + 4; // ultime 2 colonne della card
+          const boxC1 = c0 + 5;
+
+          ws.mergeCells(boxR0, boxC0, boxR1, boxC1);
+          const pctCell = ws.getCell(boxR0, boxC0);
+          pctCell.value = `${pct}%`;
+          applyCellStyle(pctCell, 16, true, 'center');
+
+          // Bordo medium del box
+          for (let r = boxR0; r <= boxR1; r++) {
+            for (let c = boxC0; c <= boxC1; c++) {
+              const cell = ws.getCell(r, c);
+              const b = cell.border || {};
+              cell.border = {
+                ...b,
+                top: r === boxR0 ? { style: 'medium' } : b.top,
+                bottom: r === boxR1 ? { style: 'medium' } : b.bottom,
+                left: c === boxC0 ? { style: 'medium' } : b.left,
+                right: c === boxC1 ? { style: 'medium' } : b.right,
+              };
+            }
+          }
+        });
+      }
+
+
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Servizi_VVF_A3_${selectedDate}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Excel Export Error:', err);
+      alert("Si è verificato un errore durante l'esportazione dell'Excel.");
     }
-
-    XLSX.writeFile(wb, `Servizi_VVF_A3_${selectedDate}.xlsx`);
   };
+
 
   const updateAssignment = (eventId: string, reqIndex: number, slotIndex: number, operatorId: string | null) => {
     setEvents(prev => prev.map(ev => {
