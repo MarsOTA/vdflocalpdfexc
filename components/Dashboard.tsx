@@ -502,9 +502,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
         return txt.length > 140 ? txt.slice(0, 137) + '...' : txt;
       };
 
+      // Stile testo per celle "card" (come il file reference: niente centratura orizzontale)
       const applyMergedTextStyle = (cell: any, fontSize: number, bold: boolean) => {
         cell.font = { name: 'Calibri', size: fontSize, bold };
-        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+        cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
       };
 
       const applyOutlineBorders = (ws: any, r0: number, c0: number, r1: number, c1: number) => {
@@ -530,8 +531,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
           paperSize: 8, // A3
           orientation: 'landscape',
           scale: 56,
-          horizontalCentered: true,
-          verticalCentered: true,
+          // come il file reference: non centrare automaticamente il contenuto sulla pagina
+          horizontalCentered: false,
+          verticalCentered: false,
           margins: { left: 0.3, right: 0.3, top: 0.3, bottom: 0.3, header: 0.2, footer: 0.2 },
         };
 
@@ -546,8 +548,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
         // intestazione data
         ws.mergeCells(1, 1, 1, 14); // A1:N1
         const headerCell = ws.getCell(1, 1);
-        headerCell.value = `DATA: ${formatDateHeader(selectedDate)}`;
-        headerCell.font = { name: 'Calibri', size: 20, bold: true };
+        // Rich text: "DATA GIORNO" 24pt bold + "Data: ..." 20pt bold
+        headerCell.value = {
+          richText: [
+            { text: 'DATA GIORNO  ', font: { name: 'Calibri', size: 24, bold: true } },
+            { text: `Data: ${formatDateHeader(selectedDate)}`, font: { name: 'Calibri', size: 20, bold: true } },
+          ],
+        };
         headerCell.alignment = { vertical: 'middle', horizontal: 'left' };
 
         // footer data
@@ -583,35 +590,38 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
           const dur = calcDurationHours(ev.timeWindow);
           const orarioCell = ws.getCell(r0 + 1, c0);
           orarioCell.value = `ORARIO: ${ev.timeWindow}${dur ? ` - DURATA: ${dur}` : ''}`;
-          applyMergedTextStyle(orarioCell, 14, true);
+          // ORARIO + DURATA: 18pt bold
+          applyMergedTextStyle(orarioCell, 18, true);
 
           // Nominativi principali
           const dirCell = ws.getCell(r0 + 2, c0);
           dirCell.value = getRoleLine(ev, 'DIR');
-          applyMergedTextStyle(dirCell, 14, false);
+          // Qualifiche + nominativi: 16pt
+          applyMergedTextStyle(dirCell, 16, false);
 
           const cpCell = ws.getCell(r0 + 3, c0);
           cpCell.value = getRoleLine(ev, 'CP');
-          applyMergedTextStyle(cpCell, 14, false);
+          applyMergedTextStyle(cpCell, 16, false);
 
           const vigCell = ws.getCell(r0 + 4, c0);
           vigCell.value = getRoleLine(ev, 'VIG');
-          applyMergedTextStyle(vigCell, 14, false);
+          applyMergedTextStyle(vigCell, 16, false);
 
           // Altri ruoli (1 riga max)
           const other = getOtherRolesLine(ev);
           if (other) {
             const otherCell = ws.getCell(r0 + 5, c0);
             otherCell.value = other;
-            applyMergedTextStyle(otherCell, 12, false);
+            applyMergedTextStyle(otherCell, 16, false);
           }
 
           // Codice giorno (tipo "APS- C")
           const dayCode = getMainDayCode(new Date(ev.date + 'T00:00:00'));
           const codeCell = ws.getCell(r0 + 6, c0);
           codeCell.value = `APS- ${dayCode}`;
-          codeCell.font = { name: 'Calibri', size: 12, bold: false };
-          codeCell.alignment = { vertical: 'middle', horizontal: 'center' };
+          // Attributi tipo APS-C: 13pt
+          codeCell.font = { name: 'Calibri', size: 13, bold: false };
+          codeCell.alignment = { vertical: 'middle', horizontal: 'left' };
         });
       }
 
