@@ -421,12 +421,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
       const EVENTS_PER_PAGE = 9;
       const totalPages = Math.max(1, Math.ceil(displayEvents.length / EVENTS_PER_PAGE));
 
+      // A3 landscape, 3 colonne di card. Ogni card = 6 colonne; tra una card e l'altra = 2 colonne vuote.
+      // Struttura colonne: [A-F] card1, [G-H] gap, [I-N] card2, [O-P] gap, [Q-V] card3
+      const CARD_COL_WIDTHS = [4.8, 12, 12, 12, 12, 12]; // 1 col qualifica + 5 cols nominativi/dettagli
+      const GAP_COL_WIDTHS = [3.0, 3.0];
       const widths = [
-        4.83203125, 9.5, 4.83203125, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
-        6.83203125, 13,
-        4.83203125, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
-        6.83203125, 13,
-        4.83203125, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+        ...CARD_COL_WIDTHS,
+        ...GAP_COL_WIDTHS,
+        ...CARD_COL_WIDTHS,
+        ...GAP_COL_WIDTHS,
+        ...CARD_COL_WIDTHS,
       ];
 
       const heights = [
@@ -435,9 +439,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
         12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
       ];
 
-      const colStarts = [1, 17, 33]; // A, Q, AG
+      const colStarts = [1, 9, 17]; // A, I, Q (con 2 colonne di spazio tra i riquadri)
       const rowStarts = [2, 12, 22]; // righe di partenza card
-      const CARD_W = 14; // colonne
+      const CARD_W = 6; // colonne (A-F)
       const CARD_H = 8;  // righe
 
       const formatDateHeader = (iso: string) => {
@@ -462,9 +466,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
         return pretty;
       };
 
-      const getRoleLine = (ev: OperationalEvent, role: string) => {
+      const getRoleNames = (ev: OperationalEvent, role: string) => {
         const req = ev.requirements.find(r => r.role === role);
-        if (!req || !req.qty) return `${role}:`;
+        if (!req || !req.qty) return '';
         const dayCode = getMainDayCode(new Date(ev.date + 'T00:00:00'));
         const priorityChain = getPriorityChain(dayCode);
 
@@ -477,10 +481,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
           else if (entrustedTo) names.push(`AFFIDATO ${entrustedTo}`);
           else names.push(`VACANTE (${priorityChain[0]})`);
         }
-        return `${role}: ${names.join(', ')}`;
+        return names.join(', ');
       };
 
-      const getOtherRolesLine = (ev: OperationalEvent) => {
+      const getOtherRolesNames = (ev: OperationalEvent) => {
         const main = new Set(['DIR', 'CP', 'VIG']);
         const parts: string[] = [];
         ev.requirements.forEach(req => {
@@ -497,7 +501,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
           if (names.length) parts.push(`${req.role}(${req.qty}): ${names.join(', ')}`);
         });
         if (!parts.length) return '';
-        const txt = `ALTRO: ${parts.join(' | ')}`;
+        const txt = parts.join(' | ');
         // evita righe infinite
         return txt.length > 140 ? txt.slice(0, 137) + '...' : txt;
       };
@@ -546,7 +550,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
         }
 
         // intestazione data
-        ws.mergeCells(1, 1, 1, 14); // A1:N1
+        ws.mergeCells(1, 1, 1, 22); // A1:V1
         const headerCell = ws.getCell(1, 1);
         // Rich text: "DATA GIORNO" 24pt bold + "Data: ..." 20pt bold
         headerCell.value = {
@@ -558,7 +562,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
         headerCell.alignment = { vertical: 'middle', horizontal: 'left' };
 
         // footer data
-        ws.mergeCells(39, 1, 39, 14); // A39:N39
+        ws.mergeCells(39, 1, 39, 22); // A39:V39
         const footerCell = ws.getCell(39, 1);
         footerCell.value = `DATA: ${selectedDate}`;
         footerCell.font = { name: 'Calibri', size: 12, bold: false };
@@ -576,10 +580,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
           // outline (più delimitazione)
           applyOutlineBorders(ws, r0, c0, r1, c1);
 
-          // merge righe testo principali
-          for (let rr = 0; rr <= 5; rr++) {
-            ws.mergeCells(r0 + rr, c0, r0 + rr, c1);
-          }
+          // Merge righe titolo/orario su tutta la card (6 colonne)
+          ws.mergeCells(r0, c0, r0, c1);
+          ws.mergeCells(r0 + 1, c0, r0 + 1, c1);
+
+          // Righe qualifica + nominativi: qualifica in 1 colonna, nominativi (restanti 5) merged
+          const mergeNameRow = (row: number) => ws.mergeCells(row, c0 + 1, row, c1);
+          mergeNameRow(r0 + 2);
+          mergeNameRow(r0 + 3);
+          mergeNameRow(r0 + 4);
+          mergeNameRow(r0 + 5);
+
+          // Riga codice giorno (APS- X) su tutta la card
+          ws.mergeCells(r0 + 6, c0, r0 + 6, c1);
 
           // Title
           const titleCell = ws.getCell(r0, c0);
@@ -594,25 +607,31 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
           applyMergedTextStyle(orarioCell, 18, true);
 
           // Nominativi principali
-          const dirCell = ws.getCell(r0 + 2, c0);
-          dirCell.value = getRoleLine(ev, 'DIR');
-          // Qualifiche + nominativi: 16pt
-          applyMergedTextStyle(dirCell, 16, false);
+          const setRoleRow = (row: number, roleLabel: string, names: string) => {
+            const roleCell = ws.getCell(row, c0);
+            roleCell.value = roleLabel;
+            roleCell.font = { name: 'Calibri', size: 16, bold: true };
+            roleCell.alignment = { vertical: 'middle', horizontal: 'left' };
 
-          const cpCell = ws.getCell(r0 + 3, c0);
-          cpCell.value = getRoleLine(ev, 'CP');
-          applyMergedTextStyle(cpCell, 16, false);
+            const namesCell = ws.getCell(row, c0 + 1);
+            namesCell.value = names;
+            applyMergedTextStyle(namesCell, 16, false);
+          };
 
-          const vigCell = ws.getCell(r0 + 4, c0);
-          vigCell.value = getRoleLine(ev, 'VIG');
-          applyMergedTextStyle(vigCell, 16, false);
+          setRoleRow(r0 + 2, 'DIR', getRoleNames(ev, 'DIR'));
+          setRoleRow(r0 + 3, 'CP', getRoleNames(ev, 'CP'));
+          setRoleRow(r0 + 4, 'VIG', getRoleNames(ev, 'VIG'));
 
           // Altri ruoli (1 riga max)
-          const other = getOtherRolesLine(ev);
+          const other = getOtherRolesNames(ev);
           if (other) {
-            const otherCell = ws.getCell(r0 + 5, c0);
-            otherCell.value = other;
-            applyMergedTextStyle(otherCell, 16, false);
+            setRoleRow(r0 + 5, 'ALTRO', other);
+          } else {
+            // Mantieni la riga vuota ma con qualifica presente per allineamento visivo
+            const roleCell = ws.getCell(r0 + 5, c0);
+            roleCell.value = 'ALTRO';
+            roleCell.font = { name: 'Calibri', size: 16, bold: true };
+            roleCell.alignment = { vertical: 'middle', horizontal: 'left' };
           }
 
           // Codice giorno (tipo "APS- C")
