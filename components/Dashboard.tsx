@@ -416,9 +416,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
     const wb = XLSX.utils.book_new();
 
     const COLS_PER_BLOCK = 14;
-    const COL_GAP = 1;
+    // Gap più ampio tra i blocchi per delimitare meglio i servizi in stampa
+    const COL_GAP = 2;
     const ROWS_PER_BLOCK = 18;
-    const ROW_GAP = 1;
+    // Gap più ampio tra i blocchi per delimitare meglio i servizi in stampa
+    const ROW_GAP = 2;
     const GRID_COLS = 3;
     const GRID_ROWS = 3;
     const EVENTS_PER_PAGE = GRID_COLS * GRID_ROWS; // 9
@@ -446,13 +448,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
       merges.push({ s: { r: r0, c: c0 }, e: { r: r1, c: c1 } });
     };
 
-    const computeCompletion = (ev: OperationalEvent) => {
-      const total = ev.requirements.reduce((sum, r) => sum + (r.qty || 0), 0);
-      const filled = ev.requirements.reduce((sum, r) => sum + (r.assignedIds?.filter(Boolean).length || 0), 0);
-      if (total <= 0) return 0;
-      return Math.round((filled / total) * 100);
-    };
-
     const buildLines = (ev: OperationalEvent) => {
       const lines: string[] = [];
       const dayCode = getMainDayCode(new Date(ev.date + 'T00:00:00'));
@@ -475,7 +470,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
           }
         }
         const joined = names.join(', ');
-        lines.push(`${req.role} x${req.qty}: ${joined}`);
+        // Più compatto per lasciare spazio ai nominativi
+        const prefix = req.qty === 1 ? `${req.role}: ` : `${req.role}(${req.qty}): `;
+        lines.push(`${prefix}${joined}`);
       });
 
       return lines;
@@ -485,8 +482,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
       const sheetName = totalPages === 1 ? 'A3' : `A3_${page + 1}`;
 
       // Dimensioni foglio: 3 blocchi in orizzontale + gap
-      const totalCols = GRID_COLS * COLS_PER_BLOCK + (GRID_COLS - 1) * COL_GAP; // 44
-      const totalRows = GRID_ROWS * ROWS_PER_BLOCK + (GRID_ROWS - 1) * ROW_GAP; // 56
+      const totalCols = GRID_COLS * COLS_PER_BLOCK + (GRID_COLS - 1) * COL_GAP;
+      const totalRows = GRID_ROWS * ROWS_PER_BLOCK + (GRID_ROWS - 1) * ROW_GAP;
 
       const aoa: (string | number | null)[][] = Array.from({ length: totalRows }, () => Array.from({ length: totalCols }, () => null));
       const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -494,14 +491,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
 
       // colonne: width pensata per stampa (card leggibili)
       ws['!cols'] = Array.from({ length: totalCols }, (_, idx) => {
-        // gap colonne più strette
-        const isGap = ((idx + 1) % (COLS_PER_BLOCK + COL_GAP) === 0) && idx !== totalCols - 1;
-        return { wch: isGap ? 2 : 4 };
+        const group = COLS_PER_BLOCK + COL_GAP;
+        const within = idx % group;
+        const isGap = within >= COLS_PER_BLOCK;
+        // gap più largo = maggiore “separazione” visiva tra servizi
+        return { wch: isGap ? 6 : 4 };
       });
       // righe: un po' più alte per leggibilità
       ws['!rows'] = Array.from({ length: totalRows }, (_, idx) => {
-        const isGap = ((idx + 1) % (ROWS_PER_BLOCK + ROW_GAP) === 0) && idx !== totalRows - 1;
-        return { hpt: isGap ? 6 : 12 };
+        const group = ROWS_PER_BLOCK + ROW_GAP;
+        const within = idx % group;
+        const isGap = within >= ROWS_PER_BLOCK;
+        // gap più alto = maggiore “separazione” visiva tra servizi
+        return { hpt: isGap ? 18 : 12 };
       });
 
       const pageEvents = displayEvents.slice(page * EVENTS_PER_PAGE, (page + 1) * EVENTS_PER_PAGE);
@@ -516,35 +518,29 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
         const c1 = c0 + COLS_PER_BLOCK - 1;
 
         // Header
-        const completion = computeCompletion(ev);
         const title = `${ev.code} — ${ev.location}`;
         const time = `${ev.timeWindow}`;
         const status = `${ev.status}`;
 
-        // Riga 1: titolo (merge) + percent
+        // Riga 1: titolo (merge completo)
         setCell(ws, r0, c0, title);
-        addMerge(merges, r0, c0, r0, c1 - 3);
+        addMerge(merges, r0, c0, r0, c1);
 
-        setCell(ws, r0, c1 - 2, 'COMPL.');
-        addMerge(merges, r0, c1 - 2, r0, c1);
-
-        // Riga 2: orario (merge) + percent value
+        // Riga 2: orario (merge completo)
         setCell(ws, r0 + 1, c0, `ORARIO: ${time}`);
-        addMerge(merges, r0 + 1, c0, r0 + 1, c1 - 3);
+        addMerge(merges, r0 + 1, c0, r0 + 1, c1);
 
-        setCell(ws, r0 + 1, c1 - 2, `${completion}%`);
-        addMerge(merges, r0 + 1, c1 - 2, r0 + 2, c1);
-
-        // Riga 3: status (merge)
+        // Riga 3: status (merge completo)
         setCell(ws, r0 + 2, c0, `STATUS: ${status}`);
-        addMerge(merges, r0 + 2, c0, r0 + 2, c1 - 3);
+        addMerge(merges, r0 + 2, c0, r0 + 2, c1);
 
-        // Corpo: righe requisiti (max 12)
+        // Corpo: righe requisiti (più spazio ai nominativi)
         const lines = buildLines(ev);
-        const maxLines = 12;
+        // 3 righe header + 1 riga footer => spazio massimo 14 righe
+        const maxLines = 14;
         for (let k = 0; k < Math.min(lines.length, maxLines); k++) {
-          setCell(ws, r0 + 4 + k, c0, lines[k]);
-          addMerge(merges, r0 + 4 + k, c0, r0 + 4 + k, c1);
+          setCell(ws, r0 + 3 + k, c0, lines[k]);
+          addMerge(merges, r0 + 3 + k, c0, r0 + 3 + k, c1);
         }
 
         // Footer: data
@@ -560,7 +556,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
         orientation: 'landscape',
         fitToWidth: 1,
         fitToHeight: 1,
-        scale: 90,
+        scale: 100,
       };
       (ws as any)['!margins'] = { left: 0.3, right: 0.3, top: 0.3, bottom: 0.3, header: 0.2, footer: 0.2 };
 
