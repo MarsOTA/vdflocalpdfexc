@@ -359,6 +359,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
           // Badge/percentuale un filo più grandi (se marcati)
           clonedDoc.querySelectorAll('[data-pdf-badge="true"]').forEach((el: any) => {
             el.style.fontSize = '10px';
+            // Evita tagli delle qualifiche nel PDF (es. "VIGILE E COORD")
+            el.style.whiteSpace = 'normal';
+            el.style.overflow = 'visible';
+            el.style.textOverflow = 'clip';
+            el.style.wordBreak = 'break-word';
+            el.style.lineHeight = '1.05';
+
+            // Allarga leggermente la colonna qualifica (sovrascrive w-24)
+            const parent = el.parentElement as HTMLElement | null;
+            if (parent) {
+              parent.style.overflow = 'visible';
+              parent.style.width = '120px';
+              parent.style.flex = '0 0 120px';
+            }
           });
           clonedDoc.querySelectorAll('[data-pdf-percent="true"]').forEach((el: any) => {
             el.style.fontSize = '12px';
@@ -692,6 +706,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ events, setEvents, role, s
             }
           }
         });
+      }
+
 
       const buf = await wb.xlsx.writeBuffer();
       const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
